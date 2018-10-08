@@ -34,11 +34,12 @@ class AbsScraper(object):
         # Build url
         self.start_url = self.url_str.format(domain=self.domain_name, start=start_date, end=end_date)
         # Create assets folder if not exists
-        if not os.path.exists(defaults['assets_folder']):
-            os.mkdir(defaults['assets_folder'])
+        if not os.path.exists(os.path.join(os.path.dirname(__file__), defaults['assets_folder'])):
+            os.mkdir(os.path.join(os.path.dirname(__file__), defaults['assets_folder']))
         # Define paths for saved files
-        self.lastpage_path = os.path.join(defaults['assets_folder'], defaults['lastpage_filename'])
-        self.index_path = os.path.join(defaults['assets_folder'], defaults['index_filename'])
+        self.lastpage_path = os.path.join(os.path.dirname(__file__),\
+                                          defaults['assets_folder'], defaults['lastpage_filename'])
+        self.index_path = os.path.join(os.path.dirname(__file__), defaults['assets_folder'], defaults['index_filename'])
 
     def dispatch(self):
 
@@ -185,7 +186,7 @@ class AbsScraper(object):
                 filing['date'] = filing_date
                 filing['exhibit'] = filing_type
                 filing['asset'] = ''
-                filing['trust'] = filing_company
+                filing['trust'] = " ".join(filing_company.split("-"))
                 filing['cik'] = filing_cik
                 filing['no'] = filing_no
                 filing['url'] = filing_url
@@ -196,15 +197,23 @@ class AbsScraper(object):
 
     def parse_absee(self, page):
 
+        """
+        Parses ABS-EE filing page attempting to extract issuing company's cik and name
+        as opposed to depositor's cik and name
+        :param page: html of ABS-EE
+        :return: (cik, issuer's name). Either can be None if not found.
+        """
+
         cik = None
         trust = None
 
         soup = bs4.BeautifulSoup(page, features="html.parser")
+        # Extract trust's cik
         page_text = soup.get_text(" ", strip=True).replace("\n", " ")
         match = re.search(r'issuing entity: (\d{10})', page_text)
         if match:
             cik = match.group(1)
-
+        # Extract trust's name
         page_text = soup.get_text("|", strip=True).replace("\n", " ")
         text_lines = page_text.split("|")
         for i, line in enumerate(text_lines):
@@ -324,7 +333,7 @@ class AbsScraper(object):
         # Uncomment for debugging
         # filings = filings[:5]
 
-        filings_path = os.path.join(defaults['assets_folder'], defaults['filings_folder'])
+        filings_path = os.path.join(os.path.dirname(__file__), defaults['assets_folder'], defaults['filings_folder'])
 
         # Remove folder if downloading from scratch
         if os.path.exists(filings_path) and not self.update:
@@ -332,23 +341,36 @@ class AbsScraper(object):
         # Create folder if not exists
         if not os.path.exists(filings_path):
             os.mkdir(filings_path)
+            # Add subfolders for each filing type
+            os.mkdir(os.path.join(filings_path, "EX-102"))
+            os.mkdir(os.path.join(filings_path, "EX-103"))
         # Iterate through entries on the index
         doc_counter = 0
         for filing in filings:
             # Subfolders are named after trust names
-            subfolder_path = os.path.join(filings_path, filing['trust'])
+            if filing['exhibit'] == "EX-103":
+                subfolder_path = os.path.join(filings_path, filing['exhibit'], filing['trust'])
+            else:
+                preview = FileDownloader.preview_download(filing['url'])
+                asset_type = 'other'
+                match = re.search(r'absee/(\w+)/assetdata', preview)
+                if match:
+                    asset_type = match.group(1)
+                asset_path = os.path.join(filings_path, filing['exhibit'], asset_type)
+                if not os.path.exists(asset_path):
+                    os.mkdir(asset_path)
+                subfolder_path = os.path.join(asset_path, filing['trust'])
+
+            # Create subfolder if not exists
             if not os.path.exists(subfolder_path):
-                # Create subfolder if not exists
                 os.mkdir(subfolder_path)
-                os.mkdir(os.path.join(subfolder_path, 'EX-102'))
-                os.mkdir(os.path.join(subfolder_path, 'EX-103'))
             # Build filename
             filename_arr = ["".join(filing['date'].split("-")),
-                            filing['trust'], filing['type'].replace("-", ""), filing['no'], filing['cik']]
+                            filing['trust'], filing['exhibit'].replace("-", ""), filing['no'], filing['cik']]
             filename_str = ".".join(["-".join(filename_arr), 'xml'])
-            filing_path = os.path.join(subfolder_path, filing['type'], filename_str)
-            outcome = FileDownloader.download(filing['href'], filing_path)
-            # outcome = self.download_filing(filing['href'], filing_path)
+            filing_path = os.path.join(subfolder_path, filename_str)
+            outcome = FileDownloader.download(filing['url'], filing_path)
+
             if outcome:
                 doc_counter += 1
 
