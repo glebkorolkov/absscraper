@@ -16,6 +16,8 @@ defaults = {
     'start_date': '01/01/2016',
 
     # Default end search date
-    'end_date': '12/31/2028'
+    'end_date': '12/31/2028',
 
+    # S3 bucket name
+    's3_bucket': 'abseeexhibitstorage'
 }

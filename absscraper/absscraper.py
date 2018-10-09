@@ -11,6 +11,7 @@ from collections import OrderedDict
 from config import defaults
 from csvfile import CsvFile
 from downloader import FileDownloader
+import boto3
 
 
 class AbsScraper(object):
@@ -24,13 +25,14 @@ class AbsScraper(object):
               '&formType=FormABSEE&isAdv=true&stemming=false&numResults=100&querySic=6189&fromDate={start}' \
               '&toDate={end}&numResults=100'
 
-    def __init__(self, update=False, index=False, download=False, start_date=defaults['start_date'],
-                 end_date=defaults['end_date']):
+    def __init__(self, update=False, index=False, download=False, use_s3=False,
+                 start_date=defaults['start_date'], end_date=defaults['end_date']):
         # Set run mode defaults
         self.update = update
         self.index = index
         self.download = download
         self.start_date = start_date
+        self.use_s3 = use_s3
         # Build url
         self.start_url = self.url_str.format(domain=self.domain_name, start=start_date, end=end_date)
         # Create assets folder if not exists
@@ -61,7 +63,10 @@ class AbsScraper(object):
         if self.index:
             self.build_index()
         if self.download:
-            self.download_filings()
+            if self.use_s3:
+                self.download_filings_s3()
+            else:
+                self.download_filings()
 
         print("Finished!")
 
@@ -376,6 +381,72 @@ class AbsScraper(object):
 
         print("Finished. Downloaded {} documents".format(doc_counter))
 
+    def download_filings_s3(self):
+
+        """
+        Downloads filings to s3 storage.
+        Downloads a filing to local folder then uploads it to s3 and deletes the local version.
+        Run "aws configure" before using this option
+        :return: None
+        """
+
+        filings = self.retrieve_index()
+
+        # Uncomment for debugging
+        filings = filings[:10]
+
+        # Path to temporary save the local version
+        temp_path = os.path.join(os.path.dirname(__file__), defaults['assets_folder'])
+
+        s3_client = boto3.client('s3')
+        bucket_name = defaults['s3_bucket']
+        s3_resource = boto3.resource('s3')
+        # Delete all folders in the bucket
+        if not self.update:
+            bucket_obj = s3_resource.Bucket(bucket_name)
+            bucket_obj.objects.all().delete()
+
+        doc_counter = 0
+        for filing in filings:
+
+            # Build filename and temporary file path
+            filename_arr = ["".join(filing['date'].split("-")),
+                            filing['trust'], filing['exhibit'].replace("-", ""), filing['no'], filing['cik']]
+            filename_str = ".".join(["-".join(filename_arr), 'xml'])
+            filing_path = os.path.join(temp_path, filename_str)
+
+            # Determine asset type and build s3 path
+            if filing['exhibit'] == "EX-103":
+                s3_path_components = [filing['exhibit'], filing['trust'], filename_str]
+            else:
+                preview = FileDownloader.preview_download(filing['url'])
+                asset_type = 'other'
+                match = re.search(r'absee/(\w+)/assetdata', preview)
+                if match:
+                    asset_type = match.group(1)
+                s3_path_components = [filing['exhibit'], asset_type, filing['trust'], filename_str]
+            s3_path = "/".join(s3_path_components)
+
+            outcome = FileDownloader.download(filing['url'], filing_path)
+            if not outcome:
+                print("Could not download url: {}".format(filing['url']))
+            else:
+                try:
+                    # Check if file exists on s3
+                    s3_resource.Object(bucket_name, s3_path).load()
+                except:
+                    doc_counter += 1
+                    s3_client.upload_file(filing_path, bucket_name, s3_path)
+                    print("Filing {} out of {} uploaded successfully. Filename: {}"
+                          .format(doc_counter, len(filings), filename_str))
+                # Remove local temporaty version
+                os.remove(filing_path)
+
+        # Upload csv index file
+        s3_client.upload_file(self.index_path, bucket_name, 'index.csv')
+        print("Index uploaded.")
+        print("Finished. Downloaded {} documents".format(doc_counter))
+
 
 def main(argv):
 
@@ -383,15 +454,17 @@ def main(argv):
                   "Available options:\n" \
                   "  -u, --update      build index / download filings starting from latest available\n" \
                   "  -i, --index       build index\n" \
-                  "  -d, --download    download filings\n"
+                  "  -d, --download    download filings\n" \
+                  "  -s, --s3          use s3 bucket for storage. Run 'aws configure' before using this option.\n"
 
     update = False
     index = False
     download = False
+    use_s3 = False
 
     # Get command line arguments. At least one is required
     try:
-        opts, args = getopt.getopt(argv, "hudi", ["help", "update", "download", "index"])
+        opts, args = getopt.getopt(argv, "hudis", ["help", "update", "download", "index", "s3"])
     except getopt.GetoptError:
         print(help_string)
         sys.exit(2)
@@ -412,9 +485,11 @@ def main(argv):
             index = True
         elif opt in ("-d", "--download"):
             download = True
+        elif opt in ("-s", "--s3"):
+            use_s3 = True
 
     # Initiate and run scraper
-    scraper = AbsScraper(update, index, download)
+    scraper = AbsScraper(update, index, download, use_s3)
     scraper.dispatch()
 
 
