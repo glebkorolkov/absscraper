@@ -1,4 +1,4 @@
-import getopt
+import argparse
 import sys
 import os
 import shutil
@@ -25,7 +25,7 @@ class AbsScraper(object):
               '&formType=FormABSEE&isAdv=true&stemming=false&numResults=100&querySic=6189&fromDate={start}' \
               '&toDate={end}&numResults=100'
 
-    def __init__(self, update=False, index=False, download=False, use_s3=False,
+    def __init__(self, index=False, download=False, update=False, use_s3=False, n_limit = 0,
                  start_date=defaults['start_date'], end_date=defaults['end_date']):
         # Set run mode defaults
         self.update = update
@@ -33,6 +33,7 @@ class AbsScraper(object):
         self.download = download
         self.start_date = start_date
         self.use_s3 = use_s3
+        self.n_limit = n_limit
         # Build url
         self.start_url = self.url_str.format(domain=self.domain_name, start=start_date, end=end_date)
         # Create assets folder if not exists
@@ -105,6 +106,9 @@ class AbsScraper(object):
             url = self.get_next(page)
             if url is None:
                 # Exit loop if no more search results
+                break
+            if self.n_limit and entries_counter >= self.n_limit:
+                # Exit if reached user-specified limit
                 break
 
         # Do some reporting
@@ -335,8 +339,8 @@ class AbsScraper(object):
 
         filings = self.retrieve_index()
 
-        # Uncomment for debugging
-        # filings = filings[:5]
+        if self.n_limit:
+            filings = filings[:self.n_limit]
 
         filings_path = os.path.join(os.path.dirname(__file__), defaults['assets_folder'], defaults['filings_folder'])
 
@@ -392,8 +396,8 @@ class AbsScraper(object):
 
         filings = self.retrieve_index()
 
-        # Uncomment for debugging
-        filings = filings[:10]
+        if self.n_limit:
+            filings = filings[:self.n_limit]
 
         # Path to temporary save the local version
         temp_path = os.path.join(os.path.dirname(__file__), defaults['assets_folder'])
@@ -450,46 +454,27 @@ class AbsScraper(object):
 
 def main(argv):
 
-    help_string = "absscraper.py [OPTIONS]\n" \
-                  "Available options:\n" \
-                  "  -u, --update      build index / download filings starting from latest available\n" \
-                  "  -i, --index       build index\n" \
-                  "  -d, --download    download filings\n" \
-                  "  -s, --s3          use s3 bucket for storage. Run 'aws configure' before using this option.\n"
+    ap = argparse.ArgumentParser(description="Web scraper for ABS-EE filings.")
 
-    update = False
-    index = False
-    download = False
-    use_s3 = False
+    ap.add_argument("-i", "--index", required=False, action='store_true', default=False,
+                    help="build index")
+    ap.add_argument("-d", "--download", required=False, action='store_true', default=False,
+                    help="download filings")
+    ap.add_argument("-s", "--s3", required=False, action='store_true', default=False,
+                    help="use s3 bucket for storage. Run 'aws configure' before using this option.")
+    ap.add_argument("-u", "--update", required=False, action='store_true', default=False,
+                    help="build index / download filings starting from latest available")
+    ap.add_argument("-n", "--number", required=False, type=int, default=0,
+                    help="number of filings to download/index")
 
-    # Get command line arguments. At least one is required
-    try:
-        opts, args = getopt.getopt(argv, "hudis", ["help", "update", "download", "index", "s3"])
-    except getopt.GetoptError:
-        print(help_string)
-        sys.exit(2)
+    args = vars(ap.parse_args())
 
-    # Exit if no arguments provided
-    if len(opts) == 0:
-        print(help_string)
-        sys.exit(2)
-
-    # Parse command line args
-    for opt, arg in opts:
-        if opt in ("-h", "--help"):
-            print(help_string)
-            sys.exit()
-        elif opt in ("-u", "--update"):
-            update = True
-        elif opt in ("-i", "--index"):
-            index = True
-        elif opt in ("-d", "--download"):
-            download = True
-        elif opt in ("-s", "--s3"):
-            use_s3 = True
+    if not args['index'] and not args['download']:
+        print("Please specify either [-u --update] or [-d --download] option. Other options are optional.")
+        ap.print_help()
 
     # Initiate and run scraper
-    scraper = AbsScraper(update, index, download, use_s3)
+    scraper = AbsScraper(args['index'], args['download'], args['update'], args['s3'], args['number'])
     scraper.dispatch()
 
 
