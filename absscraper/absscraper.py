@@ -431,20 +431,19 @@ class AbsScraper(object):
                 s3_path_components = [filing['exhibit'], asset_type, filing['trust'], filename_str]
             s3_path = "/".join(s3_path_components)
 
-            outcome = FileDownloader.download(filing['url'], filing_path)
-            if not outcome:
-                print("Could not download url: {}".format(filing['url']))
-            else:
-                try:
-                    # Check if file exists on s3
-                    s3_resource.Object(bucket_name, s3_path).load()
-                except:
+            try:
+                # Check if file exists on s3
+                s3_resource.Object(bucket_name, s3_path).load()
+            except:
+                outcome = FileDownloader.download(filing['url'], filing_path)
+                if not outcome:
+                    print("Could not download url: {}".format(filing['url']))
+                else:
                     doc_counter += 1
                     s3_client.upload_file(filing_path, bucket_name, s3_path)
                     print("Filing {} out of {} uploaded successfully. Filename: {}"
                           .format(doc_counter, len(filings), filename_str))
-                # Remove local temporaty version
-                os.remove(filing_path)
+                    os.remove(filing_path)
 
         # Upload csv index file
         s3_client.upload_file(self.index_path, bucket_name, 'index.csv')
