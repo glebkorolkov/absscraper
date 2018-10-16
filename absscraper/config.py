@@ -19,5 +19,7 @@ defaults = {
     'end_date': '12/31/2028',
 
     # S3 bucket name
-    's3_bucket': 'abseeexhibitstorage'
+    's3_bucket': 'abseeexhibitstorage',
+
+    'db_name' : 'index.db'
 }

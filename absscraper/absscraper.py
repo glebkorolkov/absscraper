@@ -11,6 +11,7 @@ from collections import OrderedDict
 from config import defaults
 from csvfile import CsvFile
 from downloader import FileDownloader
+from models import Filing, Company
 import boto3
 
 
