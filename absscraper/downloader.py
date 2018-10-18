@@ -25,7 +25,7 @@ class FileDownloader(object):
                 if chunk:
                     file_handle.write(chunk)
 
-        print('Downloaded file {} to path "{}"...'.format(url, save_path))
+        # print('Downloaded file {} to path "{}"...'.format(url, save_path))
         return True
 
     @staticmethod

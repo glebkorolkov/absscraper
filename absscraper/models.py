@@ -44,6 +44,7 @@ class SqliteDb(object):
         """
 
         conn = sqlite3.connect(self.db_name)
+        conn.row_factory = sqlite3.Row
         c = conn.cursor()
         c.execute(query)
         response = c.fetchall()
@@ -85,6 +86,7 @@ class IndexDb(SqliteDb):
         queries = list()
         queries.append('DROP TABLE IF EXISTS `filings`')
         queries.append('DROP TABLE IF EXISTS `companies`')
+        queries.append('DROP VIEW IF EXISTS `flat_index`')
         queries.append('CREATE TABLE `filings` ('
                        '`acc_no` INTEGER NOT NULL UNIQUE, '
                        '`cik_filer` INTEGER, `cik_trust` INTEGER, '
@@ -94,14 +96,22 @@ class IndexDb(SqliteDb):
                        '`date_filing` TEXT, '
                        '`date_add` TEXT, '
                        '`date_upd` TEXT, '
-                       'PRIMARY KEY(`acc_no`) )')
+                       'PRIMARY KEY(`acc_no`) );')
         queries.append('CREATE TABLE `companies` ( '
                        '`cik` INTEGER NOT NULL UNIQUE, '
                        '`name` TEXT, '
                        '`is_trust` INTEGER DEFAULT 0, '
                        '`asset_type` TEXT, '
                        '`date_add` TEXT, '
-                       'PRIMARY KEY(`cik`) )')
+                       'PRIMARY KEY(`cik`) );')
+        queries.append('CREATE VIEW flat_index AS '
+                       'SELECT f.acc_no, f.cik_filer, cc.name AS filer, cc.date_add AS filer_add, '
+                       'f.cik_trust, c.name as trust, c.date_add AS trust_add, '
+                       'c.asset_type, f.url, f.is_downloaded, f.is_parsed, '
+                       'f.date_filing, f.date_add, f.date_upd from filings AS f '
+                       'left join companies AS c on f.cik_trust=c.cik '
+                       'left join companies AS cc on f.cik_filer=cc.cik '
+                       'ORDER BY date_filing;')
         self.execute(queries)
 
     def clear(self):
@@ -113,6 +123,16 @@ class IndexDb(SqliteDb):
         queries.append('DELETE FROM `filings`;')
         queries.append('DELETE FROM `companies`')
         self.execute(queries)
+
+    def get_view(self, view_name):
+        qa = list()
+        qa.append('SELECT * FROM ')
+        qa.append(str(view_name))
+        qa.append(';')
+        result = self.get_instance().query(''.join(qa))
+        if len(result) == 0:
+            return None
+        return [dict(zip(r.keys(), list(r))) for r in result]
 
     @staticmethod
     def get_instance():
@@ -203,7 +223,8 @@ class IndexObject(object):
         rows = IndexDb.get_instance().query(query)
         if len(rows) == 0:
             return None
-        return {f: p for f, p in zip(self.table_fields, rows[0])}
+        # return {f: p for f, p in zip(self.table_fields, rows[0])}
+        return dict(zip(rows[0].keys(), list(rows[0])))
 
     def get_obj(self):
         """
@@ -228,7 +249,8 @@ class IndexObject(object):
         rows = IndexDb.get_instance().query(query)
         if len(rows) == 0:
             return None
-        return [{f: p for f, p in zip(cls.table_fields, row)} for row in rows]
+        # return [{f: p for f, p in zip(cls.table_fields, row)} for row in rows]
+        return [dict(zip(r.keys(), list(r))) for r in rows]
 
     @classmethod
     def get_filtered_rows(cls, filters={}):
@@ -248,7 +270,7 @@ class IndexObject(object):
         rows = IndexDb.get_instance().query(''.join(query_parts))
         if len(rows) == 0:
             return None
-        return [{f: p for f, p in zip(cls.table_fields, row)} for row in rows]
+        return [dict(zip(r.keys(), list(r))) for r in rows]
 
 
 class Filing(IndexObject):

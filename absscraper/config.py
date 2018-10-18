@@ -1,13 +1,7 @@
 defaults = {
 
-    # Name of folder for saving scraped data
-    'assets_folder': 'assets',
-
     # Name of subfolder for filing files
     'filings_folder': 'filings',
-
-    # Name of index csv file
-    'index_filename': 'index.csv',
 
     # Name of last scraped and saved web page
     'lastpage_filename': 'lastpage.html',
@@ -21,5 +15,6 @@ defaults = {
     # S3 bucket name
     's3_bucket': 'abseeexhibitstorage',
 
-    'db_name' : 'index.db'
+    # Database name
+    'db_name': 'index.db'
 }

@@ -5,11 +5,11 @@ import shutil
 import re
 import requests
 import bs4
+import boto3
 from datetime import date
 from config import defaults
 from downloader import FileDownloader
 from models import IndexDb, Filing, Company
-import boto3
 
 
 class AbsScraper(object):
@@ -24,6 +24,7 @@ class AbsScraper(object):
               '&toDate={end}&numResults=100'
 
     def __init__(self, index=False, download=False, rebuild=False, use_s3=False, n_limit=0,
+                 asset_types={'autoloan', 'autolease', 'rmbs'},
                  start_date=defaults['start_date'], end_date=defaults['end_date']):
         # Set run mode defaults
         self.rebuild = rebuild
@@ -32,15 +33,15 @@ class AbsScraper(object):
         self.start_date = start_date
         self.use_s3 = use_s3
         self.n_limit = n_limit
+        self.asset_types = asset_types
         # Build url
         self.start_url = self.url_str.format(domain=self.domain_name, start=start_date, end=end_date)
         # Create assets folder if not exists
-        if not os.path.exists(os.path.join(os.path.dirname(__file__), defaults['assets_folder'])):
-            os.mkdir(os.path.join(os.path.dirname(__file__), defaults['assets_folder']))
+        # if not os.path.exists(os.path.join(os.path.dirname(__file__), defaults['assets_folder'])):
+        #     os.mkdir(os.path.join(os.path.dirname(__file__), defaults['assets_folder']))
         # Define paths for saved files
-        self.lastpage_path = os.path.join(os.path.dirname(__file__),\
-                                          defaults['assets_folder'], defaults['lastpage_filename'])
-        self.index_path = os.path.join(os.path.dirname(__file__), defaults['assets_folder'], defaults['index_filename'])
+        self.lastpage_path = os.path.join(os.path.dirname(__file__), defaults['lastpage_filename'])
+        # self.index_path = os.path.join(os.path.dirname(__file__), defaults['assets_folder'], defaults['index_filename'])
 
     def dispatch(self):
 
@@ -71,10 +72,7 @@ class AbsScraper(object):
             self.build_index()
 
         if self.download:
-            if self.use_s3:
-                self.download_filings_s3()
-            else:
-                self.download_filings()
+            self.download_filings()
 
         print("Finished!")
 
@@ -296,7 +294,7 @@ class AbsScraper(object):
 
         content = response.content.decode(response.encoding)
 
-        # Save page to a file (for debugging)
+        # Save page to a file for debugging
         # with open(self.lastpage_path, 'w') as output_file:
         #     output_file.write(content)
 
@@ -315,140 +313,110 @@ class AbsScraper(object):
         recent_filings = list(filter(lambda f: f['date_filing'] == recent_date, filings))
         return recent_filings
 
-    @staticmethod
-    def retrieve_index():
-        """
-        Retrieves filings from saved csv index
-        :return: list of dicts with filings data
-        """
-        filings = Filing.get_all_rows()
-        if filings is None:
-            print("Index is empty. Rebuilding...")
-            return []
-        return filings
-
     def download_filings(self):
         """
         Creates folder structure for filings to be downloaded based on their csv index
         and launches download routine
         :return: None
         """
-
-        filings = self.retrieve_index()
+        filings = IndexDb.get_instance().get_view('flat_index')
+        if filings is None:
+            print("Index is empty! Please rebuild.")
+            sys.exit(1)
 
         if self.n_limit:
             filings = filings[:self.n_limit]
 
-        filings_path = os.path.join(os.path.dirname(__file__), defaults['assets_folder'], defaults['filings_folder'])
+        # Filter by user-defined asset type
+        filings = filter(lambda x: x['asset_type'] in self.asset_types, filings)
+        # Only leave filings that have not been downloaded
+        if not self.rebuild:
+            filings = filter(lambda x: not x['is_downloaded'], filings)
 
-        # Remove folder if downloading from scratch
-        if os.path.exists(filings_path) and not self.update:
-            shutil.rmtree(filings_path)
-        # Create folder if not exists
-        if not os.path.exists(filings_path):
-            os.mkdir(filings_path)
-            # Add subfolders for each filing type
-            os.mkdir(os.path.join(filings_path, "EX-102"))
-            os.mkdir(os.path.join(filings_path, "EX-103"))
+        # Prepare storage
+        if self.use_s3:
+            # Use S3
+            filings_path = os.path.dirname(__file__)
+            s3_client = boto3.client('s3')
+            bucket_name = defaults['s3_bucket']
+            s3_resource = boto3.resource('s3')
+            # Delete all folders in the bucket
+            if self.rebuild:
+                bucket_obj = s3_resource.Bucket(bucket_name)
+                bucket_obj.objects.all().delete()
+        else:
+            # Use local storage
+            filings_path = os.path.join(os.path.dirname(__file__), defaults['filings_folder'])
+            # Remove folder if downloading from scratch
+            if os.path.exists(filings_path) and self.rebuild:
+                shutil.rmtree(filings_path)
+            # Create folder if not exists
+            if not os.path.exists(filings_path):
+                os.mkdir(filings_path)
+
         # Iterate through entries on the index
         doc_counter = 0
         for filing in filings:
-            # Subfolders are named after trust names
-            if filing['exhibit'] == "EX-103":
-                subfolder_path = os.path.join(filings_path, filing['exhibit'], filing['trust'])
+            # Build filename
+            xml_name = filing['url'].split("/")[-1]  # Original filename from filing
+            filename = "_".join([filing['date_filing'], xml_name])
+            # Build filepath
+            if self.use_s3:
+                # Use project folder for temporary storage
+                subfolder_path = filings_path
             else:
-                preview = FileDownloader.preview_download(filing['url'])
-                asset_type = 'other'
-                match = re.search(r'absee/(\w+)/assetdata', preview)
-                if match:
-                    asset_type = match.group(1)
-                asset_path = os.path.join(filings_path, filing['exhibit'], asset_type)
+                # Create folder tree
+                asset_path = os.path.join(filings_path, filing['asset_type'])
                 if not os.path.exists(asset_path):
                     os.mkdir(asset_path)
                 subfolder_path = os.path.join(asset_path, filing['trust'])
-
-            # Create subfolder if not exists
-            if not os.path.exists(subfolder_path):
-                os.mkdir(subfolder_path)
-            # Build filename
-            filename_arr = ["".join(filing['date'].split("-")),
-                            filing['trust'], filing['exhibit'].replace("-", ""), filing['no'], filing['cik']]
-            filename_str = ".".join(["-".join(filename_arr), 'xml'])
-            filing_path = os.path.join(subfolder_path, filename_str)
-            outcome = FileDownloader.download(filing['url'], filing_path)
-
-            if outcome:
-                doc_counter += 1
-
-        print("Finished. Downloaded {} documents".format(doc_counter))
-
-    def download_filings_s3(self):
-
-        """
-        Downloads filings to s3 storage.
-        Downloads a filing to local folder then uploads it to s3 and deletes the local version.
-        Run "aws configure" before using this option
-        :return: None
-        """
-
-        filings = self.retrieve_index()
-
-        if self.n_limit:
-            filings = filings[:self.n_limit]
-
-        # Path to temporary save the local version
-        temp_path = os.path.join(os.path.dirname(__file__), defaults['assets_folder'])
-
-        s3_client = boto3.client('s3')
-        bucket_name = defaults['s3_bucket']
-        s3_resource = boto3.resource('s3')
-        # Delete all folders in the bucket
-        if not self.update:
-            bucket_obj = s3_resource.Bucket(bucket_name)
-            bucket_obj.objects.all().delete()
-
-        doc_counter = 0
-        for filing in filings:
-
-            # Build filename and temporary file path
-            filename_arr = ["".join(filing['date'].split("-")),
-                            filing['trust'], filing['exhibit'].replace("-", ""), filing['no'], filing['cik']]
-            filename_str = ".".join(["-".join(filename_arr), 'xml'])
-            filing_path = os.path.join(temp_path, filename_str)
-
-            # Determine asset type and build s3 path
-            if filing['exhibit'] == "EX-103":
-                s3_path_components = [filing['exhibit'], filing['trust'], filename_str]
-            else:
-                preview = FileDownloader.preview_download(filing['url'])
-                asset_type = 'other'
-                match = re.search(r'absee/(\w+)/assetdata', preview)
-                if match:
-                    asset_type = match.group(1)
-                s3_path_components = [filing['exhibit'], asset_type, filing['trust'], filename_str]
-            s3_path = "/".join(s3_path_components)
-
+                # Create subfolder if not exists
+                if not os.path.exists(subfolder_path):
+                    os.mkdir(subfolder_path)
+            # Download file
+            download_path = os.path.join(subfolder_path, filename)
+            print(f"Downloading document {filing['url']} ...")
+            failed_counter = 0
             try:
-                # Check if file exists on s3
-                s3_resource.Object(bucket_name, s3_path).load()
+                downloaded = FileDownloader.download(filing['url'], download_path)
             except:
-                outcome = FileDownloader.download(filing['url'], filing_path)
-                if not outcome:
-                    print("Could not download url: {}".format(filing['url']))
-                else:
-                    doc_counter += 1
-                    s3_client.upload_file(filing_path, bucket_name, s3_path)
-                    print("Filing {} out of {} uploaded successfully. Filename: {}"
-                          .format(doc_counter, len(filings), filename_str))
-                    os.remove(filing_path)
+                print(f"Download failed for document {filing['url']} Skipping...")
+                failed_counter += 1
+                if failed_counter == 5:
+                    print("Failed downloading several documents. Aborting...")
+                    sys.exit(1)
 
-        # Upload csv index file
-        s3_client.upload_file(self.index_path, bucket_name, 'index.csv')
-        print("Index uploaded.")
-        print("Finished. Downloaded {} documents".format(doc_counter))
+            if downloaded:
+                failed_counter = 0
+                print("Downloaded successfully!")
+                # Upload to s3
+                if self.use_s3 and downloaded:
+                    s3_path_components = [filing['asset_type'], filing['trust'], filename]
+                    s3_path = "/".join(s3_path_components)
+                    try:
+                        # Check if file exists on s3
+                        s3_resource.Object(bucket_name, s3_path).load()
+                    except:
+                        print("Uploading to s3...")
+                        s3_client.upload_file(download_path, bucket_name, s3_path)
+                        print(f'Uploaded document {s3_path}')
+                        os.remove(download_path)
+                # Update index
+                f = Filing.get_obj_by_acc_no(filing['acc_no'])
+                if f is not None:
+                    f.is_downloaded = True
+                    f.update()
+                doc_counter += 1
+            else:
+                print(f"Could not download url: {filing['url']}")
+
+        if self.use_s3:
+            print(f'Finished. Downloaded and uploaded to s3 {doc_counter} documents')
+        else:
+            print(f'Finished. Downloaded {doc_counter} documents')
 
 
-def main(argv):
+def main():
 
     ap = argparse.ArgumentParser(description="Web scraper for ABS-EE filings.")
 
@@ -462,17 +430,26 @@ def main(argv):
                     help="rebuild index / re-download filings from scratch")
     ap.add_argument("-n", "--number", required=False, type=int, default=0,
                     help="number of filings to download/index")
+    ap.add_argument("-a", "--asset-type", required=False, type=str, default='autoloan:autolease:rmbs',
+                    help="asset types for downloading separated by ':'. Ignored for indexing.")
 
     args = vars(ap.parse_args())
 
     if not args['index'] and not args['download']:
         print("Please specify either [-i --index] or [-d --download] option. Other options are optional.")
         ap.print_help()
+        sys.exit(2)
+
+    asset_types = set(args['asset_type'].split(':'))
+    if not len(asset_types & {'autoloan', 'autolease', 'rmbs', 'cmbs', 'debtsecurities'}):
+        print("Asset types can be autoloan:autolease:rmbs:cmbs:debtsecurities.")
+        ap.print_help()
+        sys.exit(2)
 
     # Initiate and run scraper
-    scraper = AbsScraper(args['index'], args['download'], args['rebuild'], args['s3'], args['number'])
+    scraper = AbsScraper(args['index'], args['download'], args['rebuild'], args['s3'], args['number'], asset_types)
     scraper.dispatch()
 
 
 if __name__ == '__main__':
-    main(sys.argv[1:])
+    main()
