@@ -3,15 +3,12 @@ import sys
 import os
 import shutil
 import re
-# import pdb
 import requests
 import bs4
 from datetime import date
-from collections import OrderedDict
 from config import defaults
-from csvfile import CsvFile
 from downloader import FileDownloader
-from models import Filing, Company
+from models import IndexDb, Filing, Company
 import boto3
 
 
@@ -26,10 +23,10 @@ class AbsScraper(object):
               '&formType=FormABSEE&isAdv=true&stemming=false&numResults=100&querySic=6189&fromDate={start}' \
               '&toDate={end}&numResults=100'
 
-    def __init__(self, index=False, download=False, update=False, use_s3=False, n_limit = 0,
+    def __init__(self, index=False, download=False, rebuild=False, use_s3=False, n_limit=0,
                  start_date=defaults['start_date'], end_date=defaults['end_date']):
         # Set run mode defaults
-        self.update = update
+        self.rebuild = rebuild
         self.index = index
         self.download = download
         self.start_date = start_date
@@ -63,7 +60,16 @@ class AbsScraper(object):
         # sys.exit(1)
 
         if self.index:
+            if self.rebuild:
+                answer = input("You sure you want to rebuild? [yes/No]? ")
+                if answer.lower() == 'yes':
+                    IndexDb.get_instance().clear()
+                    print("Index cleared...")
+                else:
+                    print("Aborting...")
+                    sys.exit(1)
             self.build_index()
+
         if self.download:
             if self.use_s3:
                 self.download_filings_s3()
@@ -80,29 +86,27 @@ class AbsScraper(object):
         """
 
         url = self.start_url
-        updating = False
 
-        if self.update:
-            prev_date = self.update_prepare()
-            url = self.url_str.format(domain=self.domain_name, start=prev_date, end=defaults['end_date'])
-            updating = True
+        # Search from last available date if not rebuilding and index is not empty
+        if not self.rebuild > 0:
+            recent_filings = self.get_most_recent_filings()
+            prev_date = recent_filings[0]['date_filing']
+            # Reformat date to SEC format
+            date_arr = prev_date.split("-")
+            formatted_date = "{mm}/{dd}/{yyyy}".format(mm=date_arr[1], dd=date_arr[2], yyyy=date_arr[0])
+            url = self.url_str.format(domain=self.domain_name, start=formatted_date, end=defaults['end_date'])
 
-        all_filings = []
-        recorder = CsvFile(filepath=self.index_path)
         page_counter = 0
         entries_counter = 0
 
-        print("Starting index build..." if not updating else "Starting index update...")
+        print("Starting index build..." if self.rebuild else "Starting index update...")
         # Iterate through search results pages until no Next button found
         while True:
             page = self.load_page(url)
-            filings = self.scrape_page(page)
-            # Write filings data from current search results page to csv
-            recorder.write_dict(filings, overwrite=(True if (not updating and page_counter == 0) else False))
+            # Scrape, parse and record into database current search results page
+            entries_counter += self.scrape_page(page)
             page_counter += 1
-            entries_counter += len(filings)
             print("Scraped results page {}, {} entries...".format(page_counter, entries_counter))
-            all_filings += filings
             # Get url of next search results page
             url = self.get_next(page)
             if url is None:
@@ -113,24 +117,21 @@ class AbsScraper(object):
                 break
 
         # Do some reporting
-        if not updating:
+        if self.rebuild:
             print("Index built! Total {} search result pages scraped. {} index entries created."
                   .format(page_counter, entries_counter))
         else:
             print("Index updated! Total {} search result page(s) scraped. {} index entries (re)added."
                   .format(page_counter, entries_counter))
 
-        # pdb.set_trace()
-
-    def scrape_page(self, page=None, saved_page=False):
-
+    def scrape_page(self, page=None, counter=0, saved_page=False):
         """
-        Scrapes html for filings data.
+        Scrapes html for filings data and adds them to db.
         :param page: html
+        :param counter: technical var to keep track of processed filings
         :param saved_page: boolean indicating whether to use a saved web page (for debugging)
-        :return: dict with filings data (date, trust name, exhibit type, filing no., cik, filing url)
+        :return: number of processed filings
         """
-
         # Retrieved last saved page (if available) for debugging purposes or send a request for starting page
         if saved_page:
             try:
@@ -140,72 +141,85 @@ class AbsScraper(object):
                 page = self.load_page()
 
         soup = bs4.BeautifulSoup(page, features="html.parser")
-
         tables = soup.find_all("table", attrs={'xmlns:autn': "http://schemas.autonomy.com/aci/"})
         if len(tables) == 0:
             print('Something\'s wrong. No search results have been found!')
             sys.exit(1)
 
-        filings = []
-
         # Iterate through rows of the search results table
         for tr in tables[0].select("tr"):
-            # Step1. Identify top row of each search result (skip rows with classes blue and infoBorder).
+            # Identify top row of each search result (skip rows with classes blue and infoBorder).
             if 'class' in tr.attrs and any(css_class in tr.attrs['class'] for css_class in ['infoBorder', 'blue']):
                 continue
-
-            filing = OrderedDict()
 
             tds = tr.select("td")
             # Transform filing date in "mm/dd/yyyy" format to date object
             date_str = tds[0].text
             date_arr = date_str.split("/")
             filing_date = date(year=int(date_arr[2]), month=int(date_arr[0]), day=int(date_arr[1]))
+
             title_links = tds[1].select('a')
             if len(title_links) > 1:
                 filing_title = title_links[0].text
                 filing_type = filing_title[:6].strip()  # should be either EX-102 or EX-103
-                filing_company = filing_title[21:].strip()  # company name as appears in the headline
+                # Skip EX-103 exhibits
+                if filing_type == 'EX-103':
+                    continue
+
                 filing_url = title_links[1].attrs['href'].strip()
-                filing_cik = filing_url.split("/")[6].strip() # headline company cik
-                filing_no = filing_url.split("/")[7].strip()
+                acc_no = filing_url.split("/")[7].strip()
+                filer_company = filing_title[21:].strip()  # company name as appears in the headline
+                filer_cik = filing_url.split("/")[6].strip()  # headline company cik
+                trust_company = filer_company
+                trust_cik = filer_cik
+                # Get more information on company
+                middle_tr = tr.find_next_sibling("tr", attrs={'class', 'blue'})
+                company_strings = middle_tr.select(".normalbold")
 
-                # Step 2. Check middle row for company names if word "trust" not in headline
-                if 'trust' not in filing_company.lower():
-                    middle_tr = tr.find_next_sibling("tr", attrs={'class', 'blue'})
-                    company_strings = middle_tr.select(".normalbold")
-                    if len(company_strings) > 1 and 'trust' in company_strings[1].text.lower():
-                        # Override company name if word trust is found in middle row
-                        filing_company = company_strings[1].text.split("(")[0].strip()
-                        possible_ciks = re.findall(r'\d{7}', company_strings[1].text)
-                        if len(possible_ciks) > 0:
-                            filing_cik = possible_ciks[0]
+                if len(company_strings) > 1:
+                    # If two company names below headline
+                    a1_company = company_strings[0].text.split("(")[0].strip()
+                    a2_company = company_strings[1].text.split("(")[0].strip()
+                    # Cik can be 6 or 7 digits
+                    a1_cik = re.findall(r'\d{6,8}', company_strings[0].text)[0]
+                    a2_cik = re.findall(r'\d{6,8}', company_strings[1].text)[0]
+                    # Trust's cik is always greater than filer's
+                    if int(a1_cik) > int(a2_cik):
+                        trust_company = a1_company
+                        trust_cik = a1_cik
                     else:
-                        # Step 3. Get lower row with parent filing (abs) url
-                        parent_filing_href = tr.find_next_sibling("tr", attrs={'class', 'infoBorder'})\
-                            .select("td.footer a.clsBlueBg")[0].attrs['href']
-                        abs_url = parent_filing_href[parent_filing_href.find("(")+1:parent_filing_href.find(")")]\
-                            .split(",")[0].strip("'")
-                        absee_page = self.load_page(abs_url)
-                        (abs_cik, abs_trust) = self.parse_absee(absee_page)
-                        if abs_cik is not None:
-                            filing_cik = abs_cik
-                        if abs_trust is not None:
-                            filing_company = abs_trust
+                        trust_company = a2_company
+                        trust_cik = a2_cik
+                else:
+                    # If only one company's name below headline, dig deeper
+                    parent_filing_href = tr.find_next_sibling("tr", attrs={'class', 'infoBorder'})\
+                        .select("td.footer a.clsBlueBg")[0].attrs['href']
+                    abs_url = parent_filing_href[parent_filing_href.find("(")+1:parent_filing_href.find(")")]\
+                        .split(",")[0].strip("'")
+                    absee_page = self.load_page(abs_url)
+                    (abs_cik, abs_trust) = self.parse_absee(absee_page)
+                    if abs_cik is not None:
+                        trust_cik = abs_cik
+                    if abs_trust is not None:
+                        trust_company = abs_trust
 
-                filing['date'] = filing_date
-                filing['exhibit'] = filing_type
-                filing['asset'] = ''
-                filing['trust'] = " ".join(filing_company.split("-"))
-                filing['cik'] = filing_cik
-                filing['no'] = filing_no
-                filing['url'] = filing_url
+                # Create filing object instance
+                filing = Filing(acc_no)
+                filing.cik_filer = filer_cik
+                filing.cik_trust = trust_cik
+                filing.url = filing_url
+                filing.date_filing = filing_date
 
-                filings.append(filing)
+                # Save only if no database entry found for this accession no
+                if filing.get_obj_by_acc_no(acc_no) is None:
+                    filing.add()
+                counter += 1
+                print(f'Done with {filer_company}-{filer_cik} from {filing_date}...')
 
-        return filings
+        return counter
 
-    def parse_absee(self, page):
+    @staticmethod
+    def parse_absee(page):
 
         """
         Parses ABS-EE filing page attempting to extract issuing company's cik and name
@@ -250,7 +264,8 @@ class AbsScraper(object):
 
         return None
 
-    def load_page(self, url):
+    @staticmethod
+    def load_page(url):
 
         """
         Loads html content of given url.
@@ -275,63 +290,32 @@ class AbsScraper(object):
 
         return content
 
-    def update_prepare(self):
-
+    @staticmethod
+    def get_most_recent_filings():
         """
-        Searches existing index for last entry date and returns it as string.
-        Then removes entries with that date from the index
-        so that filings as of last available date get reindexed.
-        This is done in case SEC uploaded additional filings for the day after previous scraping.
-        :return: date string in mm/dd/yyyy format
+        Looks up most recent date's filings in the db.
+        :return: list of dicts or empty dict
         """
+        filings = Filing.get_all_rows()
+        if filings is None:
+            return []
+        recent_date = max([f['date_filing'] for f in filings])
+        recent_filings = list(filter(lambda f: f['date_filing'] == recent_date, filings))
+        return recent_filings
 
-        # Open existing index file
-        filings = self.retrieve_index()
-
-        prev_date = filings[-1]['date'] # get last available filing date (yyyy-mm-dd format)
-        # Reformat date to SEC format
-        date_arr = prev_date.split("-")
-        formatted_date = "{mm}/{dd}/{yyyy}".format(mm=date_arr[1], dd=date_arr[2], yyyy=date_arr[0])
-
-        # Move entries prior to last available date to another dict
-        filings_trunc = []
-        skipped_counter = 0
-        for filing in filings:
-            if not filing['date'] == prev_date:
-                filings_trunc.append(filing)
-            else:
-                skipped_counter += 1
-
-        csv_file = CsvFile(self.index_path)
-        csv_file.write_dict(filings_trunc, overwrite=True)
-
-        print("Index prepared! {} entries truncated.".format(skipped_counter))
-        # Return date string in "mm/dd/yyyy" format
-        return formatted_date
-
-    def retrieve_index(self):
-
+    @staticmethod
+    def retrieve_index():
         """
         Retrieves filings from saved csv index
-        :return: dict of OrderedDicts with filings data
+        :return: list of dicts with filings data
         """
-
-        try:
-            csv_file = CsvFile(self.index_path)
-            filings = csv_file.read_dict()
-        except FileNotFoundError:
-            print("Cannot retrieve current index file. Please create index first.")
-            sys.exit(1)
-
-        # Abort if index is empty
-        if len(filings) < 2:
-            print("Index appears to be empty. Please rebuild from scratch.")
-            sys.exit(1)
-
+        filings = Filing.get_all_rows()
+        if filings is None:
+            print("Index is empty. Rebuilding...")
+            return []
         return filings
 
     def download_filings(self):
-
         """
         Creates folder structure for filings to be downloaded based on their csv index
         and launches download routine
@@ -462,19 +446,19 @@ def main(argv):
                     help="download filings")
     ap.add_argument("-s", "--s3", required=False, action='store_true', default=False,
                     help="use s3 bucket for storage. Run 'aws configure' before using this option.")
-    ap.add_argument("-u", "--update", required=False, action='store_true', default=False,
-                    help="build index / download filings starting from latest available")
+    ap.add_argument("-r", "--rebuild", required=False, action='store_true', default=False,
+                    help="rebuild index / re-download filings from scratch")
     ap.add_argument("-n", "--number", required=False, type=int, default=0,
                     help="number of filings to download/index")
 
     args = vars(ap.parse_args())
 
     if not args['index'] and not args['download']:
-        print("Please specify either [-u --update] or [-d --download] option. Other options are optional.")
+        print("Please specify either [-i --index] or [-d --download] option. Other options are optional.")
         ap.print_help()
 
     # Initiate and run scraper
-    scraper = AbsScraper(args['index'], args['download'], args['update'], args['s3'], args['number'])
+    scraper = AbsScraper(args['index'], args['download'], args['rebuild'], args['s3'], args['number'])
     scraper.dispatch()
 
 

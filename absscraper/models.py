@@ -71,7 +71,7 @@ class IndexDb(SqliteDb):
         db_path = os.path.join(os.path.dirname(__file__), self.db_name)
         if not os.path.exists(db_path):
             print("Database does not exist!")
-            answer = input("Do you want to create a new one? [yes/No]?")
+            answer = input("Do you want to create a new one? [yes/No]? ")
             if answer.lower() == 'yes':
                 self.setup()
             else:
@@ -93,6 +93,7 @@ class IndexDb(SqliteDb):
                        '`is_parsed` INTEGER DEFAULT 0, '
                        '`date_filing` TEXT, '
                        '`date_add` TEXT, '
+                       '`date_upd` TEXT, '
                        'PRIMARY KEY(`acc_no`) )')
         queries.append('CREATE TABLE `companies` ( '
                        '`cik` INTEGER NOT NULL UNIQUE, '
@@ -101,6 +102,16 @@ class IndexDb(SqliteDb):
                        '`asset_type` TEXT, '
                        '`date_add` TEXT, '
                        'PRIMARY KEY(`cik`) )')
+        self.execute(queries)
+
+    def clear(self):
+        """
+        Clears all tables.
+        :return: None
+        """
+        queries = list()
+        queries.append('DELETE FROM `filings`;')
+        queries.append('DELETE FROM `companies`')
         self.execute(queries)
 
     @staticmethod
@@ -118,9 +129,11 @@ class IndexObject(object):
     General class to be extended by more specific classes. Should not be used on it own.
     """
 
-    def __init__(self, table_name, table_fields=[]):
-        self.table_name = table_name
-        self.table_fields = table_fields
+    table_name = None
+    table_fields = []
+
+    def __init__(self):
+        pass
 
     def get_db_fields(self):
         """
@@ -155,12 +168,19 @@ class IndexObject(object):
         Updates existing db record with object attributes by calling UPDATE.
         :return:
         """
+        fields = list(self.get_db_fields().keys())[1:]
+        values = list(self.get_db_fields().values())[1:]
+        pk = list(self.get_db_fields().keys())[0]
         query_parts = list()
         query_parts.append(f'UPDATE {self.table_name} SET ')
-        query_parts.append(', '.join([f'{k}=?' for k in self.get_db_fields().keys()]))
+        query_parts.append(', '.join([f'{k}=?' for k in fields]))
+        query_parts.append(' WHERE ')
+        query_parts.append(pk)
+        query_parts.append("=")
+        query_parts.append(str(getattr(self, pk)))
         query_parts.append(';')
         db = IndexDb.get_instance()
-        db.execute("".join(query_parts), list(self.get_db_fields().values()))
+        db.execute("".join(query_parts), values)
 
     def delete(self):
         """
@@ -183,7 +203,7 @@ class IndexObject(object):
         rows = IndexDb.get_instance().query(query)
         if len(rows) == 0:
             return None
-        return rows[0]
+        return {f: p for f, p in zip(self.table_fields, rows[0])}
 
     def get_obj(self):
         """
@@ -194,9 +214,41 @@ class IndexObject(object):
         if row is None:
             return False
         # Populate object attributes with values from db
-        for i, val in enumerate(row):
-            setattr(self, self.table_fields[i], val)
+        for k, val in row.items():
+            setattr(self, k, val)
         return True
+
+    @classmethod
+    def get_all_rows(cls):
+        """
+        Returns all rows for objects in db.
+        :return: list of dicts or None
+        """
+        query = f'SELECT * FROM {cls.table_name} WHERE 1;'
+        rows = IndexDb.get_instance().query(query)
+        if len(rows) == 0:
+            return None
+        return [{f: p for f, p in zip(cls.table_fields, row)} for row in rows]
+
+    @classmethod
+    def get_filtered_rows(cls, filters={}):
+        """
+        Returns rows for objects in db filtered by a set of 'equal' conditions.
+        :return: list of dicts or None
+        """
+        fstr = "1"
+        if len(filters):
+            fstr = ' AND '.join([k + '=' + str(v*1) for k, v in filters.items()])
+
+        query_parts = list()
+        query_parts.append(f'SELECT * FROM {cls.table_name} WHERE ')
+        query_parts.append(fstr)
+        query_parts.append(';')
+        print(''.join(query_parts))
+        rows = IndexDb.get_instance().query(''.join(query_parts))
+        if len(rows) == 0:
+            return None
+        return [{f: p for f, p in zip(cls.table_fields, row)} for row in rows]
 
 
 class Filing(IndexObject):
@@ -205,23 +257,22 @@ class Filing(IndexObject):
     Class representing ABS-EE filing
     """
 
+    table_name = 'filings'
+    table_fields = [
+        'acc_no',
+        'cik_filer',
+        'cik_trust',
+        'url',
+        'is_downloaded',
+        'is_parsed',
+        'date_filing',
+        'date_add',
+        'date_upd'
+    ]
+
     def __init__(self, acc_no, cik_filer=None, cik_trust=None, url=None, is_downloaded=False, is_parsed=False,
-                 date_filing=None, date_add=None):
-
-        super().__init__(
-            'filings',
-            [
-                'acc_no',
-                'cik_filer',
-                'cik_trust',
-                'url',
-                'is_downloaded',
-                'is_parsed',
-                'date_filing',
-                'date_add'
-            ]
-        )
-
+                 date_filing=None, date_add=None, date_upd=None):
+        super().__init__()
         self.acc_no = acc_no
         self.cik_filer = cik_filer
         self.cik_trust = cik_trust
@@ -230,6 +281,7 @@ class Filing(IndexObject):
         self.is_parsed = is_parsed
         self.date_filing = date_filing
         self.date_add = date_add
+        self.date_upd = date_upd
 
     def __str__(self):
         return f'Filing\n' \
@@ -243,7 +295,16 @@ class Filing(IndexObject):
         :return: None
         """
         self.date_add = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        self.date_upd = self.date_add
         super().add()
+
+    def update(self):
+        """
+        Overrides parent class by automatically modifying update time
+        :return: None
+        """
+        self.date_upd = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        super().update()
 
     @staticmethod
     def get_obj_by_acc_no(acc_no):
@@ -264,18 +325,17 @@ class Company(IndexObject):
     Class representing company (filer or trust) associated with filings
     """
 
-    def __init__(self, cik, name=None, is_trust=False, asset_type=None, date_add=None):
-        super().__init__(
-            'companies',
-            [
+    table_name = 'companies'
+    table_fields = [
                 'cik',
                 'name',
                 'is_trust',
                 'asset_type',
                 'date_add'
             ]
-        )
 
+    def __init__(self, cik, name=None, is_trust=False, asset_type=None, date_add=None):
+        super().__init__()
         self.cik = cik
         self.name = name
         self.is_trust = is_trust
