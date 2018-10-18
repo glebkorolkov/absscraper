@@ -168,8 +168,8 @@ class AbsScraper(object):
 
                 filing_url = title_links[1].attrs['href'].strip()
                 acc_no = filing_url.split("/")[7].strip()
-                filer_company = filing_title[21:].strip()  # company name as appears in the headline
                 filer_cik = filing_url.split("/")[6].strip()  # headline company cik
+                filer_company = filing_title[21:].strip()  # company name as appears in the headline
                 trust_company = filer_company
                 trust_cik = filer_cik
                 # Get more information on company
@@ -203,13 +203,27 @@ class AbsScraper(object):
                     if abs_trust is not None:
                         trust_company = abs_trust
 
-                # Create filing object instance
+                # Save company data into db
+                asset_type = None
+                tco = Company.get_obj_by_cik(trust_cik)
+                if tco is None:
+                    preview = FileDownloader.preview_download(filing_url)
+                    match = re.search(r'absee/(\w+)/assetdata', preview)
+                    if match:
+                        asset_type = match.group(1)
+                    tco = Company(cik=trust_cik, name=trust_company, is_trust=True, asset_type=asset_type)
+                    tco.add()
+                if not filer_cik == trust_cik:
+                    fco = Company.get_obj_by_cik(filer_cik)
+                    if fco is None:
+                        fco = Company(cik=filer_cik, name=filer_company, is_trust=False, asset_type=asset_type)
+                        fco.add()
+                # Save filing data into db
                 filing = Filing(acc_no)
                 filing.cik_filer = filer_cik
                 filing.cik_trust = trust_cik
                 filing.url = filing_url
                 filing.date_filing = filing_date
-
                 # Save only if no database entry found for this accession no
                 if filing.get_obj_by_acc_no(acc_no) is None:
                     filing.add()
@@ -220,14 +234,12 @@ class AbsScraper(object):
 
     @staticmethod
     def parse_absee(page):
-
         """
         Parses ABS-EE filing page attempting to extract issuing company's cik and name
         as opposed to depositor's cik and name
         :param page: html of ABS-EE
         :return: (cik, issuer's name). Either can be None if not found.
         """
-
         cik = None
         trust = None
 
