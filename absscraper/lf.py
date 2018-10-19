@@ -12,3 +12,4 @@ def ok():
     print("  \        /")
     print("   |     /")
     print("   |    |")
+    print("")

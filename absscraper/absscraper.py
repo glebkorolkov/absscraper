@@ -6,7 +6,7 @@ import re
 import requests
 import bs4
 import boto3
-from datetime import date
+from datetime import date, datetime
 from config import defaults
 from downloader import FileDownloader
 from lf import ok
@@ -37,12 +37,8 @@ class AbsScraper(object):
         self.asset_types = asset_types
         # Build url
         self.start_url = self.url_str.format(domain=self.domain_name, start=start_date, end=end_date)
-        # Create assets folder if not exists
-        # if not os.path.exists(os.path.join(os.path.dirname(__file__), defaults['assets_folder'])):
-        #     os.mkdir(os.path.join(os.path.dirname(__file__), defaults['assets_folder']))
-        # Define paths for saved files
+        # Define paths for saved html
         self.lastpage_path = os.path.join(os.path.dirname(__file__), defaults['lastpage_filename'])
-        # self.index_path = os.path.join(os.path.dirname(__file__), defaults['assets_folder'], defaults['index_filename'])
 
     def dispatch(self):
 
@@ -66,16 +62,16 @@ class AbsScraper(object):
                 answer = input("You sure you want to rebuild? [yes/No]? ")
                 if answer.lower() == 'yes':
                     IndexDb.get_instance().clear()
-                    print("Index cleared...")
+                    print(f"{ats()} Index cleared...")
                 else:
-                    print("Aborting...")
+                    print(f"{ats()} Aborting...")
                     sys.exit(1)
             self.build_index()
 
         if self.download:
             self.download_filings()
 
-        print("Finished. Good job!")
+        print(f"{ats()} Finished. Good job!")
         ok()
 
     def build_index(self):
@@ -99,14 +95,14 @@ class AbsScraper(object):
         page_counter = 0
         entries_counter = 0
 
-        print("Starting index build..." if self.rebuild else "Starting index update...")
+        print(f"{ats()} Starting index build..." if self.rebuild else f"{ats()} Starting index update...")
         # Iterate through search results pages until no Next button found
         while True:
             page = self.load_page(url)
             # Scrape, parse and record into database current search results page
             entries_counter += self.scrape_page(page)
             page_counter += 1
-            print("Scraped results page {}, {} entries...".format(page_counter, entries_counter))
+            print(f"{ats()} Scraped results page {page_counter}, {entries_counter} entries...")
             # Get url of next search results page
             url = self.get_next(page)
             if url is None:
@@ -118,11 +114,11 @@ class AbsScraper(object):
 
         # Do some reporting
         if self.rebuild:
-            print("Index built! Total {} search result pages scraped. {} index entries created."
-                  .format(page_counter, entries_counter))
+            print(f'{ats()} Index built! Total {page_counter} search result pages scraped. '
+                  f'{entries_counter} index entries created.')
         else:
-            print("Index updated! Total {} search result page(s) scraped. {} index entries (re)added."
-                  .format(page_counter, entries_counter))
+            print(f'{ats()} Index updated! Total {page_counter} search result page(s) scraped. '
+                  f'{entries_counter} index entries (re)added.')
 
     def scrape_page(self, page=None, counter=0, saved_page=False):
         """
@@ -143,7 +139,7 @@ class AbsScraper(object):
         soup = bs4.BeautifulSoup(page, features="html.parser")
         tables = soup.find_all("table", attrs={'xmlns:autn': "http://schemas.autonomy.com/aci/"})
         if len(tables) == 0:
-            print('Something\'s wrong. No search results have been found!')
+            print(f'{ats()} Something\'s wrong. No search results have been found!')
             sys.exit(1)
 
         # Iterate through rows of the search results table
@@ -228,7 +224,7 @@ class AbsScraper(object):
                 if filing.get_obj_by_acc_no(acc_no) is None:
                     filing.add()
                 counter += 1
-                print(f'Done with {filer_company}-{filer_cik} from {filing_date}...')
+                print(f'{ats()} Done with {filer_company}-{filer_cik} from {filing_date}...')
 
         return counter
 
@@ -331,12 +327,12 @@ class AbsScraper(object):
 
         # Only leave filings that have not been downloaded
         if self.rebuild:
-            print("Updating index...")
+            print(f"{ats()} Updating index...")
             for filing in filings:
                 fobj = Filing.get_obj_by_acc_no(filing['acc_no'])
                 fobj.is_downloaded = False
                 fobj.update()
-            print("Done!")
+            print(f'{ats()} Done!')
         else:
             filings = filter(lambda x: not x['is_downloaded'], filings)
 
@@ -386,20 +382,20 @@ class AbsScraper(object):
             # Download file
             download_path = os.path.join(subfolder_path, filename)
             print("-"*5)
-            print(f"Downloading document {filing['url']} ...")
+            print(f"{ats()} Downloading document {filing['url']} ...")
             failed_counter = 0
+            downloaded = False
             try:
                 downloaded = FileDownloader.download(filing['url'], download_path)
             except:
-                print(f"Download failed for document {filing['url']} Skipping...")
+                print(f"{ats()} Download failed for document {filing['url']} Skipping...")
                 failed_counter += 1
                 if failed_counter == 5:
-                    print("Failed downloading several documents. Aborting...")
+                    print(f"{ats()} Failed downloading several documents. Aborting...")
                     sys.exit(1)
 
             if downloaded:
-                failed_counter = 0
-                print("Downloaded successfully!")
+                print(f"{ats()} Downloaded successfully!")
                 # Upload to s3
                 if self.use_s3 and downloaded:
                     s3_path_components = [filing['asset_type'], filing['trust'], filename]
@@ -408,9 +404,9 @@ class AbsScraper(object):
                         # Check if file exists on s3
                         s3_resource.Object(bucket_name, s3_path).load()
                     except:
-                        print("Uploading to s3...")
+                        print(f"{ats()} Uploading to s3...")
                         s3_client.upload_file(download_path, bucket_name, s3_path)
-                        print(f'Uploaded document {s3_path}')
+                        print(f'{ats()} Uploaded document {s3_path}')
                         os.remove(download_path)
                 # Update index
                 f = Filing.get_obj_by_acc_no(filing['acc_no'])
@@ -419,12 +415,20 @@ class AbsScraper(object):
                     f.update()
                 doc_counter += 1
             else:
-                print(f"Could not download url: {filing['url']}")
+                print(f"{ats()} Could not download url: {filing['url']}")
 
         if self.use_s3:
-            print(f'Finished. Downloaded and uploaded to s3 {doc_counter} documents')
+            print(f'{ats()} Finished. Downloaded and uploaded to s3 {doc_counter} documents.')
         else:
-            print(f'Finished. Downloaded {doc_counter} documents')
+            print(f'{ats()} Finished. Downloaded {doc_counter} documents.')
+
+
+def ats():
+    """
+    Produces current timestamp string in YYYY-MM-DD hh:mm:ss format
+    :return: string with current datetime info
+    """
+    return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
 
 def main():

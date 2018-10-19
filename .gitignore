@@ -5,7 +5,7 @@ __pycache__/
 # Distribution / packaging
 venv/
 .idea/
-assets/
+filings/
 
 # Database
 *.db*
