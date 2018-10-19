@@ -337,7 +337,7 @@ class AbsScraper(object):
             filings = filter(lambda x: not x['is_downloaded'], filings)
 
         # Filter by user-defined asset type
-        filings = filter(lambda x: x['asset_type'] in self.asset_types, filings)
+        filings = list(filter(lambda x: x['asset_type'] in self.asset_types, filings))
 
         # Prepare storage
         if self.use_s3:
@@ -365,7 +365,7 @@ class AbsScraper(object):
         for filing in filings:
             # Build filename
             xml_name = filing['url'].split("/")[-1]  # Original filename from filing
-            filename = "_".join([filing['date_filing'], xml_name])
+            filename = "_".join([filing['date_filing'], str(filing['acc_no']), xml_name])
             # Build filepath
             if self.use_s3:
                 # Use project folder for temporary storage
