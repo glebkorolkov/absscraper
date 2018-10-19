@@ -9,6 +9,7 @@ import boto3
 from datetime import date
 from config import defaults
 from downloader import FileDownloader
+from lf import ok
 from models import IndexDb, Filing, Company
 
 
@@ -74,7 +75,8 @@ class AbsScraper(object):
         if self.download:
             self.download_filings()
 
-        print("Finished!")
+        print("Finished. Good job!")
+        ok()
 
     def build_index(self):
 
@@ -327,11 +329,19 @@ class AbsScraper(object):
         if self.n_limit:
             filings = filings[:self.n_limit]
 
+        # Only leave filings that have not been downloaded
+        if self.rebuild:
+            print("Updating index...")
+            for filing in filings:
+                fobj = Filing.get_obj_by_acc_no(filing['acc_no'])
+                fobj.is_downloaded = False
+                fobj.update()
+            print("Done!")
+        else:
+            filings = filter(lambda x: not x['is_downloaded'], filings)
+
         # Filter by user-defined asset type
         filings = filter(lambda x: x['asset_type'] in self.asset_types, filings)
-        # Only leave filings that have not been downloaded
-        if not self.rebuild:
-            filings = filter(lambda x: not x['is_downloaded'], filings)
 
         # Prepare storage
         if self.use_s3:
@@ -375,6 +385,7 @@ class AbsScraper(object):
                     os.mkdir(subfolder_path)
             # Download file
             download_path = os.path.join(subfolder_path, filename)
+            print("-"*5)
             print(f"Downloading document {filing['url']} ...")
             failed_counter = 0
             try:

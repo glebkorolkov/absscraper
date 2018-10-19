@@ -64,7 +64,7 @@ class IndexDb(SqliteDb):
         :param db_name:
         """
         if db_name is None:
-            db_name = defaults['db_name']
+            db_name = os.path.join(os.path.dirname(__file__), defaults['db_name'])
 
         super().__init__(db_name)
 
