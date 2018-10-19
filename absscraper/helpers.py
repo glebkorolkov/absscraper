@@ -1,6 +1,8 @@
 import requests
+from datetime import datetime
 
 
+# CLASSES
 class FileDownloader(object):
 
     """
@@ -47,3 +49,30 @@ class FileDownloader(object):
             content_arr.append(chunk)
 
         return "\n".join(content_arr)
+
+
+# FUNCTIONS
+def ats():
+    """
+    Produces current timestamp string in YYYY-MM-DD hh:mm:ss format
+    :return: string with current datetime info
+    """
+    return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+
+def ok():
+    print("      _")
+    print("    _| |")
+    print("  _| | |")
+    print(" | | | |")
+    print(" | | | | __")
+    print(" | | | |/  \\")
+    print(" |       /\ \\")
+    print(" |      /  \/")
+    print(" |      \  /\\")
+    print(" |       \/ /")
+    print("  \        /")
+    print("   |     /")
+    print("   |    |")
+    print("")
+

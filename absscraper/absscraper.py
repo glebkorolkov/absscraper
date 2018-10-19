@@ -8,8 +8,7 @@ import bs4
 import boto3
 from datetime import date, datetime
 from config import defaults
-from downloader import FileDownloader
-from lf import ok
+from helpers import FileDownloader, ats, ok
 from models import IndexDb, Filing, Company
 
 
@@ -421,14 +420,6 @@ class AbsScraper(object):
             print(f'{ats()} Finished. Downloaded and uploaded to s3 {doc_counter} documents.')
         else:
             print(f'{ats()} Finished. Downloaded {doc_counter} documents.')
-
-
-def ats():
-    """
-    Produces current timestamp string in YYYY-MM-DD hh:mm:ss format
-    :return: string with current datetime info
-    """
-    return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
 
 def main():
