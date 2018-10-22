@@ -18,3 +18,13 @@ defaults = {
     # Database name
     'db_name': 'index.db'
 }
+
+# Credentials for database with asset data
+db_config = {
+    'db_type': 'mysql',
+    'db_user': 'root',
+    'db_password': 'root',
+    'db_host': '127.0.0.1',
+    'db_port': '3306',
+    'db_name': 'assets'
+}
