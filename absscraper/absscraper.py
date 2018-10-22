@@ -6,7 +6,7 @@ import re
 import requests
 import bs4
 import boto3
-from datetime import date, datetime
+from datetime import date
 from config import defaults
 from helpers import FileDownloader, ats, ok
 from models import IndexDb, Filing, Company
@@ -45,22 +45,14 @@ class AbsScraper(object):
         Main class method that calls other methods depending on mode (index, download, update).
         :return: None
         """
-        # Debugging code
-        # url = "https://www.sec.gov/Archives/edgar/data/1129987/000112998717000004/fcaot2017-aabsxeejanuary20.htm"
-        # url = "https://www.sec.gov/Archives/edgar/data/1689111/000153949716004112/n799_x1-absee.htm"
-        # page = self.load_page(url)
-        # print(self.parse_absee(page))
-
-        # page = self.load_page(self.start_url)
-        # self.scrape_page(page)
-        # print(self.scrape_page(page))
-        # sys.exit(1)
-
         if self.index:
             if self.rebuild:
                 answer = input("You sure you want to rebuild? [yes/No]? ")
                 if answer.lower() == 'yes':
-                    IndexDb.get_instance().clear()
+                    # Drop and recreate tables
+                    db = IndexDb()
+                    db.clear()
+                    db.setup()
                     print(f"{ats()} Index cleared...")
                 else:
                     print(f"{ats()} Aborting...")
@@ -74,21 +66,18 @@ class AbsScraper(object):
         ok()
 
     def build_index(self):
-
         """
-        Iterates through search result pages and scrapes them for filings information.
+        Iterate through search result pages and scrape them for filings information.
         :return: None
         """
-
         url = self.start_url
 
         # Search from last available date if not rebuilding and index is not empty
         if not self.rebuild > 0:
             recent_filings = self.get_most_recent_filings()
-            prev_date = recent_filings[0]['date_filing']
-            # Reformat date to SEC format
-            date_arr = prev_date.split("-")
-            formatted_date = "{mm}/{dd}/{yyyy}".format(mm=date_arr[1], dd=date_arr[2], yyyy=date_arr[0])
+            pdt = recent_filings[0].date_filing
+            # Reformat date to SEC format MM/DD/YYYY
+            formatted_date = f"{pdt:02}/{pdt:02}/{pdt.year}"
             url = self.url_str.format(domain=self.domain_name, start=formatted_date, end=defaults['end_date'])
 
         page_counter = 0
@@ -121,7 +110,7 @@ class AbsScraper(object):
 
     def scrape_page(self, page=None, counter=0, saved_page=False):
         """
-        Scrapes html for filings data and adds them to db.
+        Scrape html for filings data and add them to db.
         :param page: html
         :param counter: technical var to keep track of processed filings
         :param saved_page: boolean indicating whether to use a saved web page (for debugging)
@@ -198,39 +187,43 @@ class AbsScraper(object):
                     if abs_trust is not None:
                         trust_company = abs_trust
 
-                # Save company data into db
-                asset_type = None
-                tco = Company.get_obj_by_cik(trust_cik)
-                if tco is None:
-                    preview = FileDownloader.preview_download(filing_url)
-                    match = re.search(r'absee/(\w+)/assetdata', preview)
-                    if match:
-                        asset_type = match.group(1)
-                    tco = Company(cik=trust_cik, name=trust_company, is_trust=True, asset_type=asset_type)
-                    tco.add()
-                if not filer_cik == trust_cik:
-                    fco = Company.get_obj_by_cik(filer_cik)
-                    if fco is None:
-                        fco = Company(cik=filer_cik, name=filer_company, is_trust=False, asset_type=asset_type)
-                        fco.add()
-                # Save filing data into db
-                filing = Filing(acc_no)
-                filing.cik_filer = filer_cik
-                filing.cik_trust = trust_cik
-                filing.url = filing_url
-                filing.date_filing = filing_date
-                # Save only if no database entry found for this accession no
-                if filing.get_obj_by_acc_no(acc_no) is None:
-                    filing.add()
-                counter += 1
-                print(f'{ats()} Done with {filer_company}-{filer_cik} from {filing_date}...')
+                # Save company and filing data into db
+                with IndexDb.get_session() as session:
+                    asset_type = None
+                    # Save trust company if does not exist
+                    tco = session.query(Company).get(trust_cik)
+                    if tco is None:
+                        preview = FileDownloader.preview_download(filing_url)
+                        match = re.search(r'absee/(\w+)/assetdata', preview)
+                        if match:
+                            asset_type = match.group(1)
+                        tco = Company(cik=trust_cik, name=trust_company, is_trust=True, asset_type=asset_type)
+                        session.add(tco)
+                    # Save filer company if does not exist
+                    if not filer_cik == trust_cik:
+                        fco = session.query(Company).get(filer_cik)
+                        if fco is None:
+                            fco = Company(cik=filer_cik, name=filer_company, is_trust=False, asset_type=asset_type)
+                            session.add(fco)
+                    # Save filing data
+                    filing = Filing(acc_no=acc_no,
+                                    cik_filer=filer_cik,
+                                    cik_trust=trust_cik,
+                                    url=filing_url,
+                                    date_filing=filing_date)
+                    # Save only if no database entry found for this accession no
+                    if session.query(Filing).get(acc_no) is None:
+                        session.add(filing)
+
+                    counter += 1
+                    print(f'{ats()} Done with {filer_company}-{filer_cik} from {filing_date}...')
 
         return counter
 
     @staticmethod
     def parse_absee(page):
         """
-        Parses ABS-EE filing page attempting to extract issuing company's cik and name
+        Parse ABS-EE filing page attempting to extract issuing company's cik and name
         as opposed to depositor's cik and name
         :param page: html of ABS-EE
         :return: (cik, issuer's name). Either can be None if not found.
@@ -254,13 +247,11 @@ class AbsScraper(object):
         return cik, trust
 
     def get_next(self, page=None):
-
         """
-        Scrapes html page for Next search results page url
+        Scrape html page for Next search results page url.
         :param page: html
         :return: None
         """
-
         if page is None:
             return None
 
@@ -273,13 +264,11 @@ class AbsScraper(object):
 
     @staticmethod
     def load_page(url):
-
         """
-        Loads html content of given url.
+        Load html content of a given url.
         :param url: url of web page
         :return: html string
         """
-
         parameters = {'User-Agent': "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) \
         Chrome/69.0.3497.100 Safari/537.36"}
         response = requests.get(url, params=parameters)
@@ -300,43 +289,51 @@ class AbsScraper(object):
     @staticmethod
     def get_most_recent_filings():
         """
-        Looks up most recent date's filings in the db.
+        Look up most recent date's filings in the db.
         :return: list of dicts or empty dict
         """
-        filings = Filing.get_all_rows()
-        if filings is None:
-            return []
-        recent_date = max([f['date_filing'] for f in filings])
-        recent_filings = list(filter(lambda f: f['date_filing'] == recent_date, filings))
-        return recent_filings
+        with IndexDb.get_session() as session:
+            last_filing = session.query(Filing).order_by(Filing.date_filing.desc()).first()
+            if last_filing is None:
+                return []
+            return session.query(Filing)\
+                .filter(Filing.date_filing == last_filing.date_filing).all()
 
     def download_filings(self):
         """
-        Creates folder structure for filings to be downloaded based on their csv index
-        and launches download routine
+        Create folder structure for filings to be downloaded based on their csv index
+        and launch download routine.
         :return: None
         """
-        filings = IndexDb.get_instance().get_view('flat_index')
-        if filings is None:
-            print("Index is empty! Please rebuild.")
-            sys.exit(1)
+        filings = []
 
-        if self.n_limit:
-            filings = filings[:self.n_limit]
+        with IndexDb.get_session() as session:
+            q = session.query(Filing, Company)\
+                .filter(Company.cik == Filing.cik_trust)\
+                .order_by(Filing.date_filing, Filing.acc_no)
 
-        # Only leave filings that have not been downloaded
-        if self.rebuild:
-            print(f"{ats()} Updating index...")
-            for filing in filings:
-                fobj = Filing.get_obj_by_acc_no(filing['acc_no'])
-                fobj.is_downloaded = False
-                fobj.update()
-            print(f'{ats()} Done!')
-        else:
-            filings = filter(lambda x: not x['is_downloaded'], filings)
+            # Exit if index is empty
+            if q.count() == 0:
+                session.close()
+                print("Index is empty! Please rebuild.")
+                sys.exit(1)
 
-        # Filter by user-defined asset type
-        filings = list(filter(lambda x: x['asset_type'] in self.asset_types, filings))
+            # Apply document limit
+            if self.n_limit:
+                q = q[:self.n_limit]
+
+            # Only leave filings that have not been downloaded
+            if self.rebuild:
+                print(f"{ats()} Updating index...")
+                for row in q.all():
+                    row.Filing.is_downloaded=False
+                print(f'{ats()} Done!')
+            else:
+                q = q.filter(Filing.id_downloaded == False)
+
+            # Filter by user-defined asset type
+            q = q.filter(Company.asset_type.in_(self.asset_types))
+            filings = q.all()
 
         # Prepare storage
         if self.use_s3:
@@ -361,33 +358,34 @@ class AbsScraper(object):
 
         # Iterate through entries on the index
         doc_counter = 0
-        for filing in filings:
+        for row in filings: # row contains two objects: Filing and Company
             # Build filename
-            xml_name = filing['url'].split("/")[-1]  # Original filename from filing
-            filename = "_".join([filing['date_filing'], str(filing['acc_no']), xml_name])
+            xml_name = row.Filing.url.split("/")[-1]  # Original filename from filing
+            filename = "_".join([row.Filing.date_filing.strftime("%Y-%m-%d"), str(row.Filing.acc_no), xml_name])
             # Build filepath
             if self.use_s3:
                 # Use project folder for temporary storage
                 subfolder_path = filings_path
             else:
                 # Create folder tree
-                asset_path = os.path.join(filings_path, filing['asset_type'])
+                asset_path = os.path.join(filings_path, row.Company.asset_type)
                 if not os.path.exists(asset_path):
                     os.mkdir(asset_path)
-                subfolder_path = os.path.join(asset_path, filing['trust'])
+                subfolder_path = os.path.join(asset_path, row.Company.name)
                 # Create subfolder if not exists
                 if not os.path.exists(subfolder_path):
                     os.mkdir(subfolder_path)
+
             # Download file
             download_path = os.path.join(subfolder_path, filename)
             print("-"*5)
-            print(f"{ats()} Downloading document {filing['url']} ...")
+            print(f"{ats()} Downloading document {row.Filing.url} ...")
             failed_counter = 0
             downloaded = False
             try:
-                downloaded = FileDownloader.download(filing['url'], download_path)
+                downloaded = FileDownloader.download(row.Filing.url, download_path)
             except:
-                print(f"{ats()} Download failed for document {filing['url']} Skipping...")
+                print(f"{ats()} Download failed for document {row.Filing.url} Skipping...")
                 failed_counter += 1
                 if failed_counter == 5:
                     print(f"{ats()} Failed downloading several documents. Aborting...")
@@ -397,7 +395,7 @@ class AbsScraper(object):
                 print(f"{ats()} Downloaded successfully!")
                 # Upload to s3
                 if self.use_s3 and downloaded:
-                    s3_path_components = [filing['asset_type'], filing['trust'], filename]
+                    s3_path_components = [row.Company.asset_type, row.Company.name, filename]
                     s3_path = "/".join(s3_path_components)
                     try:
                         # Check if file exists on s3
@@ -408,13 +406,15 @@ class AbsScraper(object):
                         print(f'{ats()} Uploaded document {s3_path}')
                         os.remove(download_path)
                 # Update index
-                f = Filing.get_obj_by_acc_no(filing['acc_no'])
-                if f is not None:
-                    f.is_downloaded = True
-                    f.update()
+                with IndexDb.get_session() as session:
+                    f = session.query(Filing).get(row.Filing.acc_no)
+                    # f = Filing.get_obj_by_acc_no(row.Filing.acc_no)
+                    if f is not None:
+                        f.is_downloaded = True
+                        # f.update()
                 doc_counter += 1
             else:
-                print(f"{ats()} Could not download url: {filing['url']}")
+                print(f"{ats()} Could not download url: {row.Filing.url}")
 
         if self.use_s3:
             print(f'{ats()} Finished. Downloaded and uploaded to s3 {doc_counter} documents.')
