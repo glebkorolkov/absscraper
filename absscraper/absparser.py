@@ -1,11 +1,12 @@
 import argparse
 import sys
 from helpers import ats, ok
+from models import *
 
 
 class AbsParser(object):
 
-    def __init__(self, warn=False, use_s3=False, rebuild=False, n_limit=0,
+    def __init__(self, warn=False, rebuild=False, use_s3=False,  n_limit=0,
                  asset_types={'autoloan', 'autolease', 'rmbs'}):
         self.warn = warn
         self.use_s3 = use_s3
@@ -30,7 +31,21 @@ class AbsParser(object):
                 sys.exit(1)
 
     def issue_warnings(self):
-        pass
+        with IndexDb.get_session() as session:
+            multifilings = session.query(Company.name.label('trust'), Filing.cik_trust, Filing.date_filing,
+                              func.count().label('num_filings')) \
+                .filter(Filing.cik_trust == Company.cik) \
+                .filter(Company.asset_type.in_(self.asset_types))\
+                .order_by(Company.name)\
+                .group_by(Filing.cik_trust, Filing.date_filing) \
+                .having(func.count() > 1).all()
+            if len(multifilings) > 0:
+                print(f"{ats()} Please, check the following filings that occured on same day:")
+                for m in multifilings:
+                    print(f'{m.trust} (cik: {m.cik_trust}) on {m.date_filing.strftime("%Y-%m-%d")}'
+                          f' - {m.num_filings} filings')
+            else:
+                print(f"{ats()} Looks great! No same day filings found.")
 
 
 def main():
