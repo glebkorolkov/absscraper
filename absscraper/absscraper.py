@@ -408,7 +408,6 @@ class AbsScraper(object):
                 # Update index
                 with IndexDb.get_session() as session:
                     f = session.query(Filing).get(row.Filing.acc_no)
-                    # f = Filing.get_obj_by_acc_no(row.Filing.acc_no)
                     if f is not None:
                         f.is_downloaded = True
                         # f.update()

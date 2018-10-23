@@ -1,13 +1,19 @@
-from models import *
 from config import db_config
-from collections import OrderedDict
+from sqlalchemy import create_engine, ForeignKey
+from sqlalchemy import Column, Integer, BigInteger, String, Boolean, DateTime, Date
+from sqlalchemy.orm import sessionmaker, relationship
+from sqlalchemy.sql import func
+from sqlalchemy.ext.declarative import declarative_base
+from contextlib import contextmanager
 from sqlalchemy.types import DECIMAL
 
 AssetBase = declarative_base()
 
 
 class AssetDb(object):
-
+    """
+    Database class for parser.
+    """
     def __init__(self):
         self.db_config = db_config
         engine_uri = "{0}+pymysql://{1}:{2}@{3}:{4}/{5}".format(
@@ -50,11 +56,13 @@ class AssetDb(object):
 
 
 class Autoloan(AssetBase):
-
+    """
+    Auto loan records class.
+    """
     __tablename__ = 'autoloans'
 
     autoloanId = Column(Integer, primary_key=True, nullable=False, autoincrement=True, unique=True)
-    filingAccNo = Column(Integer, nullable=False)
+    filingAccNo = Column(BigInteger, nullable=False)
     assetTypeNumber = Column(String(100))
     assetNumber = Column(String(25))
     reportingPeriodBeginningDate = Column(Date)
@@ -129,6 +137,7 @@ class Autoloan(AssetBase):
     repossessedProceedsAmount = Column(DECIMAL(20, 8))
     dateAdd = Column(DateTime(timezone=True), server_default=func.now())
 
+    # Fields requiring preprocessing
     special_fields = {
         'reportingPeriodBeginningDate': 'Date1',
         'reportingPeriodEndingDate': 'Date1',
@@ -136,14 +145,18 @@ class Autoloan(AssetBase):
         'loanMaturityDate': 'Date2',
         'originalFirstPaymentDate': 'Date2',
         'underwritingIndicator': 'Boolean',
+        'subvented': 'Unlimited',
         'coObligorIndicator': 'Boolean',
         'assetAddedIndicator': 'Boolean',
         'reportingPeriodModificationIndicator': 'Boolean',
         'interestPaidThroughDate': 'Date1',
         'zeroBalanceEffectiveDate': 'Date2',
+        'zeroBalanceCode': 'Unlimited',
         'mostRecentServicingTransferReceivedDate': 'Date2',
         'assetSubjectDemandIndicator': 'Boolean',
         'demandResolutionDate': 'Date1',
+        'repurchaseReplacementReasonCode': 'Unlimited',
+        'modificationTypeCode': 'Unlimited',
         'repossessedIndicator': 'Boolean'
     }
 
@@ -152,11 +165,13 @@ class Autoloan(AssetBase):
 
 
 class Autolease(AssetBase):
-
+    """
+    Auto lease records class.
+    """
     __tablename__ = 'autoleases'
 
     autoleaseId = Column(Integer, primary_key=True, nullable=False, autoincrement=True, unique=True)
-    filingAccNo = Column(Integer, nullable=False)
+    filingAccNo = Column(BigInteger, nullable=False)
     assetTypeNumber = Column(String(255))
     assetNumber = Column(String(255))
     reportingPeriodBeginDate = Column(Date)
@@ -225,6 +240,7 @@ class Autolease(AssetBase):
     liquidationProceedsAmount = Column(DECIMAL(20, 8))
     dateAdd = Column(DateTime(timezone=True), server_default=func.now())
 
+    # Fields requiring preprocessing
     special_fields = {
         'reportingPeriodBeginningDate': 'Date1',
         'reportingPeriodEndingDate': 'Date1',
@@ -232,14 +248,19 @@ class Autolease(AssetBase):
         'scheduledTerminationDate': 'Date2',
         'originalFirstPaymentDate': 'Date2',
         'underwritingIndicator': 'Boolean',
+        'subvented': 'Unlimited',
         'coLesseePresentIndicator': 'Boolean',
         'assetAddedIndicator': 'Boolean',
         'reportingPeriodModificationIndicator': 'Boolean',
         'paidThroughDate': 'Date1',
         'zeroBalanceEffectiveDate': 'Date2',
+        'zeroBalanceCode': 'Unlimited',
         'mostRecentServicingTransferReceivedDate': 'Date2',
         'assetSubjectDemandIndicator': 'Boolean',
-        'demandResolutionDate': 'Date1'
+        'demandResolutionDate': 'Date1',
+        'repurchaseOrReplacementReasonCode': 'Unlimited',
+        'modificationTypeCode': 'Unlimited',
+        'terminationIndicator': 'Unlimited'
     }
 
     def __repr__(self):
@@ -247,7 +268,9 @@ class Autolease(AssetBase):
 
 
 class AssetFiling(AssetBase):
-
+    """
+    Filing class.
+    """
     __tablename__ = 'filings'
 
     accNo = Column(Integer, primary_key=True, unique=True, nullable=False)
