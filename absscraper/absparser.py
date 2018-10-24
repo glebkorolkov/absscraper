@@ -109,8 +109,6 @@ class AbsParser(object):
         if self.use_s3:
             # Use S3
             filings_path = os.path.dirname(__file__)
-            s3_client = boto3.client('s3')
-            bucket_name = defaults['s3_bucket']
             s3_resource = boto3.resource('s3')
         else:
             # Use local storage
@@ -131,7 +129,7 @@ class AbsParser(object):
                 local_path = os.path.join(filings_path, filename)
                 try:
                     print(f'{ats()} Downloading filing {s3_path}...')
-                    # s3_resource.Bucket(defaults['s3_bucket']).download_file(s3_path, local_path)
+                    s3_resource.Bucket(defaults['s3_bucket']).download_file(s3_path, local_path)
                 except:
                     print(f'{ats()} Could not download filing {s3_path} from s3.')
                     continue
@@ -144,8 +142,6 @@ class AbsParser(object):
                 file_path = os.path.join(subfolder_path, filename)
             print("-" * 5)
             print(f'{ats()} Parsing...')
-
-            file_path = '/home/gleb/PycharmProjects/absscraper/absscraper/2017-01-12_112998717000004_a2017aconsolidatedlld.xml'
 
             if self.parse_filing(file_path, row.Company.asset_type, row.Filing.acc_no):
                 print(f'{ats()} Parsing complete!')
@@ -238,7 +234,7 @@ def main():
                     help="reparse filings from scratch")
     ap.add_argument("-n", "--number", required=False, type=int, default=0,
                     help="number of filings to parse")
-    ap.add_argument("-a", "--asset-type", required=False, type=str, default='autoloan:autolease:rmbs',
+    ap.add_argument("-a", "--asset-type", required=False, type=str, default='autoloan:autolease',
                     help="asset types for downloading separated by ':'")
     ap.add_argument("-t", "--trust", required=False, type=str, help="trust cik")
     ap.add_argument("-f", "--filing", required=False, type=str, help="filing accession number")

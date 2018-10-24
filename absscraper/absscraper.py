@@ -435,7 +435,7 @@ def main():
                     help="rebuild index / re-download filings from scratch")
     ap.add_argument("-n", "--number", required=False, type=int, default=0,
                     help="number of filings to download/index")
-    ap.add_argument("-a", "--asset-type", required=False, type=str, default='autoloan:autolease:rmbs',
+    ap.add_argument("-a", "--asset-type", required=False, type=str, default='autoloan:autolease',
                     help="asset types for downloading separated by ':'. Ignored for indexing.")
 
     args = vars(ap.parse_args())
