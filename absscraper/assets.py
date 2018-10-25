@@ -273,7 +273,7 @@ class AssetFiling(AssetBase):
     """
     __tablename__ = 'filings'
 
-    accNo = Column(Integer, primary_key=True, unique=True, nullable=False)
+    accNo = Column(BigInteger, primary_key=True, unique=True, nullable=False)
     trustCik = Column(Integer)
     trustName = Column(String(255))
     url = Column(String(255), nullable=False)

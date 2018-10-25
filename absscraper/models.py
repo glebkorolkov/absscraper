@@ -65,6 +65,8 @@ class Filing(IndexBase):
     date_filing = Column(Date)
     date_add = Column(DateTime(timezone=True), server_default=func.now())
     date_upd = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+    # Added at a later stage after data collection had started
+    skip = Column(Boolean, default=False)
 
     trust = relationship("Company", back_populates="filings")
 
