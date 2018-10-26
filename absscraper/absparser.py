@@ -202,7 +202,8 @@ class AbsParser(object):
         with open(file_path, 'rb') as datafile:
             # Preview file and extract namespace
             head = datafile.read(1024).decode('utf-8')
-            ns = re.search(r'xmlns="(.*)">', head).group(1)
+            # ns = re.search(r'xmlns="(.*)">', head).group(1)
+            ns = re.search(r'xmlns="(http://www\.sec\.gov/edgar/document/absee/.*/assetdata)"\s?', head).group(1)
             nstag = ''.join(['{', ns, '}assetData'])
             datafile.seek(0)
             # Open database session
@@ -211,6 +212,9 @@ class AbsParser(object):
                 # Parse the tree
                 for event, element in etree.iterparse(datafile, events=('end',), tag=nstag):
                     for assettag in element:
+                        if len(assettag) == 0:
+                            print(f"{ats()} Issue with data. Please check!")
+                            sys.exit(1)
                         # Build list of tuples with fieldname-fieldvalue pairs
                         fields = [(etree.QName(item.tag).localname, item.text) for item in assettag]
                         # Initiate object
