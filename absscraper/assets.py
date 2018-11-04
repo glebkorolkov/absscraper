@@ -30,12 +30,18 @@ class AssetDb(object):
         """
         AssetBase.metadata.create_all(self.engine)
 
+    def setup_table(self, table_name):
+        AssetBase.metadata.tables[table_name].create(self.engine)
+
     def clear(self):
         """
         Drop all tables.
         :return:
         """
         AssetBase.metadata.drop_all(self.engine)
+
+    def clear_table(self, table_name):
+        AssetBase.metadata.tables[table_name].drop(self.engine)
 
     @staticmethod
     @contextmanager
@@ -55,6 +61,24 @@ class AssetDb(object):
             session.close()
 
 
+class AssetFiling(AssetBase):
+    """
+    Filing class.
+    """
+    __tablename__ = 'filings'
+
+    accNo = Column(BigInteger, primary_key=True, unique=True, nullable=False)
+    trustCik = Column(Integer)
+    trustName = Column(String(255))
+    url = Column(String(255), nullable=False)
+    dateFiling = Column(Date)
+    assetType = Column(String(32))
+    dateAdd = Column(DateTime(timezone=True), server_default=func.now())
+
+    def __repr__(self):
+        return f"<AssetFiling(dateFiling={self.dateFiling}, trustName={self.trustName}, acc_no={self.accNo})>"
+
+
 class Autoloan(AssetBase):
     """
     Auto loan records class.
@@ -62,7 +86,7 @@ class Autoloan(AssetBase):
     __tablename__ = 'autoloans'
 
     autoloanId = Column(Integer, primary_key=True, nullable=False, autoincrement=True, unique=True)
-    filingAccNo = Column(BigInteger, nullable=False)
+    filingAccNo = Column(BigInteger, ForeignKey(AssetFiling.accNo), nullable=False)
     assetTypeNumber = Column(String(100))
     assetNumber = Column(String(25))
     reportingPeriodBeginningDate = Column(Date)
@@ -137,6 +161,10 @@ class Autoloan(AssetBase):
     repossessedProceedsAmount = Column(DECIMAL(20, 8))
     dateAdd = Column(DateTime(timezone=True), server_default=func.now())
 
+    filing = relationship("AssetFiling",
+                          primaryjoin=filingAccNo == AssetFiling.accNo,
+                          back_populates="autoloans")
+
     # Fields requiring preprocessing
     special_fields = {
         'reportingPeriodBeginningDate': 'Date1',
@@ -162,6 +190,11 @@ class Autoloan(AssetBase):
 
     def __repr__(self):
         return f"<Autoloan(autoloanId={self.autoloanId}, filingAccNo={self.filingAccNo})>"
+
+
+AssetFiling.autoloans = relationship("Autoloan",
+                                     order_by=Autoloan.reportingPeriodEndingDate,
+                                     back_populates="filing")
 
 
 class Autolease(AssetBase):
@@ -267,20 +300,48 @@ class Autolease(AssetBase):
         return f"<Autolease(autoleaseId={self.autoleaseId}, filingAccNo={self.filingAccNo})>"
 
 
-class AssetFiling(AssetBase):
+class AutoloanFlat(AssetBase):
     """
-    Filing class.
+    Static auto loan class. Only contains fields that do not change.
     """
-    __tablename__ = 'filings'
+    __tablename__ = 'autoloans_flat'
 
-    accNo = Column(BigInteger, primary_key=True, unique=True, nullable=False)
+    trustAssetNumber = Column(String(64), primary_key=True, nullable=False, unique=True)
+    dateFirstFiling = Column(Date)
     trustCik = Column(Integer)
-    trustName = Column(String(255))
-    url = Column(String(255), nullable=False)
-    dateFiling = Column(Date)
-    assetType = Column(String(32))
-    dateAdd = Column(DateTime(timezone=True), server_default=func.now())
+    assetNumber = Column(String(25))
+    originationDate = Column(Date)
+    originalLoanAmount = Column(DECIMAL(20, 8))
+    originalLoanTerm = Column(Integer)
+    loanMaturityDate = Column(Date)
+    originalInterestRatePercentage = Column(DECIMAL(20, 8))
+    underwritingIndicator = Column(Boolean)
+    gracePeriodNumber = Column(Integer)
+    subvented = Column(String(255))
+    vehicleManufacturerName = Column(String(30))
+    vehicleModelName = Column(String(30))
+    vehicleNewUsedCode = Column(String(255))
+    vehicleModelYear = Column(String(4))
+    vehicleTypeCode = Column(String(255))
+    vehicleValueAmount = Column(DECIMAL(20, 8))
+    obligorCreditScore = Column(String(20))
+    obligorIncomeVerificationLevelCode = Column(String(255))
+    obligorEmploymentVerificationCode = Column(String(255))
+    coObligorIndicator = Column(Boolean)
+    paymentToIncomePercentage = Column(DECIMAL(20, 8))
+    obligorGeographicLocation = Column(String(100))
+    zeroBalanceEffectiveDate = Column(Date)
+    zeroBalanceCode = Column(String(255))
+    delinquency30Days = Column(Date)
+    delinquency90Days = Column(Date)
+    repossessedIndicator = Column(Boolean)
+    repossessedDate = Column(Date)
 
-    def __repr__(self):
-        return f"<AssetFiling(dateFiling={self.dateFiling}, trustName={self.trustName}, acc_no={self.accNo})>"
-
+    updatable_fields = [
+        'zeroBalanceEffectiveDate',
+        'zeroBalanceCode',
+        'delinquency30Days',
+        'delinquency90Days',
+        'repossessedIndicator',
+        'repossessedDate'
+    ]

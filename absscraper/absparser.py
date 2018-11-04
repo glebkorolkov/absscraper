@@ -262,7 +262,7 @@ class AbsParser(object):
 
 def main():
 
-    ap = argparse.ArgumentParser(description="Web scraper for ABS-EE filings.")
+    ap = argparse.ArgumentParser(description="Parser for XML-formatted ABS-EE filings.")
 
     ap.add_argument("-w", "--warn", required=False, action='store_true', default=False,
                     help="issue warnings about same-day filings")
