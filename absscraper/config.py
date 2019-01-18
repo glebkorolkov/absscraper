@@ -28,12 +28,3 @@ db_config = {
     'db_port': '3306',
     'db_name': 'assets'
 }
-
-# db_config = {
-#     'db_type': 'mysql',
-#     'db_user': 'scraper',
-#     'db_password': 'hae6eiN9ke',
-#     'db_host': 'ec2-52-91-34-36.compute-1.amazonaws.com',
-#     'db_port': '3306',
-#     'db_name': 'assets'
-# }
